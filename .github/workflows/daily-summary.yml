@@ -1,0 +1,109 @@
+name: Daily Activity Summary
+
+on:
+  schedule:
+    # Midnight ET = 05:00 UTC (EST) / 04:00 UTC (EDT)
+    - cron: "0 4 * * *"
+  workflow_dispatch: # Manual trigger for testing
+
+permissions:
+  contents: write
+
+jobs:
+  generate-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate daily activity summary
+        env:
+          GH_TOKEN: ${{ secrets.ACTIVITY_PAT }}
+        run: |
+          set -e
+
+          # Date for the summary (yesterday)
+          SUMMARY_DATE=$(date -u -d "yesterday" +%Y-%m-%d)
+          FILENAME=$(date -u -d "yesterday" +%m%d%y)_Activity_Summary.md
+          DISPLAY_DATE=$(date -u -d "yesterday" +"%B %d, %Y")
+          SINCE="${SUMMARY_DATE}T00:00:00Z"
+          UNTIL=$(date -u +%Y-%m-%dT00:00:00Z)
+
+          # Repos to monitor
+          REPOS=(
+            "aadey002/grant-reviewer-alert-system"
+            "aadey002/ache-study-smart"
+            "aadey002/quantum-marketing-hub"
+            "aadey002/onboardeq"
+            "aadey002/thc-board-intelligence"
+            "aadey002/hrsa-osv-assistant"
+            "aadey002/truereach-app"
+            "aadey002/thc-training-portal"
+            "aadey002/pastor-bailey-bible-study"
+            "aadey002/MPJE"
+            "aadey002/Stock-agent-"
+            "aadey002/daily-activity-logs"
+          )
+
+          TOTAL_COMMITS=0
+          BODY=""
+
+          for REPO in "${REPOS[@]}"; do
+            REPO_NAME=$(echo "$REPO" | cut -d'/' -f2)
+
+            # Get commits from yesterday using GitHub API
+            COMMITS=$(gh api "repos/${REPO}/commits?since=${SINCE}&until=${UNTIL}&per_page=100" \
+              --jq '.[] | "| `" + (.sha[:7]) + "` | " + (.commit.message | split("\n")[0]) + " |"' \
+              2>/dev/null || echo "")
+
+            if [ -n "$COMMITS" ]; then
+              COUNT=$(echo "$COMMITS" | wc -l)
+              TOTAL_COMMITS=$((TOTAL_COMMITS + COUNT))
+              BODY="${BODY}
+## ${REPO_NAME}
+
+**Commits:** ${COUNT}
+
+| Commit | Message |
+|--------|---------|
+${COMMITS}
+"
+            fi
+          done
+
+          # Skip if no commits
+          if [ "$TOTAL_COMMITS" -eq 0 ]; then
+            echo "No commits found for ${SUMMARY_DATE}. Skipping."
+            exit 0
+          fi
+
+          # Write the summary file
+          cat > "${FILENAME}" << HEREDOC
+          # Activity Summary — ${DISPLAY_DATE}
+
+          **Total Commits:** ${TOTAL_COMMITS}
+          **Repos with Activity:** $(echo "$BODY" | grep -c "^## " || true)
+
+          ---
+          ${BODY}
+          ---
+
+          *Generated automatically at $(date -u +"%Y-%m-%d %H:%M UTC")*
+          HEREDOC
+
+          # Clean up leading whitespace from heredoc
+          sed -i 's/^          //' "${FILENAME}"
+
+          echo "Generated ${FILENAME} with ${TOTAL_COMMITS} commits"
+
+      - name: Commit and push
+        run: |
+          FILENAME=$(date -u -d "yesterday" +%m%d%y)_Activity_Summary.md
+          if [ ! -f "$FILENAME" ]; then
+            echo "No summary file generated. Skipping commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${FILENAME}"
+          git commit -m "docs: $(date -u -d 'yesterday' +%m%d%y) activity summary"
+          git push
