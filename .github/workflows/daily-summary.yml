@@ -2,9 +2,8 @@ name: Daily Activity Summary
 
 on:
   schedule:
-    # Midnight ET = 05:00 UTC (EST) / 04:00 UTC (EDT)
     - cron: "0 4 * * *"
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,17 +17,16 @@ jobs:
       - name: Generate daily activity summary
         env:
           GH_TOKEN: ${{ secrets.ACTIVITY_PAT }}
+        shell: bash
         run: |
           set -e
 
-          # Date for the summary (yesterday)
           SUMMARY_DATE=$(date -u -d "yesterday" +%Y-%m-%d)
           FILENAME=$(date -u -d "yesterday" +%m%d%y)_Activity_Summary.md
           DISPLAY_DATE=$(date -u -d "yesterday" +"%B %d, %Y")
           SINCE="${SUMMARY_DATE}T00:00:00Z"
           UNTIL=$(date -u +%Y-%m-%dT00:00:00Z)
 
-          # Repos to monitor
           REPOS=(
             "aadey002/grant-reviewer-alert-system"
             "aadey002/ache-study-smart"
@@ -45,54 +43,54 @@ jobs:
           )
 
           TOTAL_COMMITS=0
-          BODY=""
+          TMPFILE=$(mktemp)
 
           for REPO in "${REPOS[@]}"; do
             REPO_NAME=$(echo "$REPO" | cut -d'/' -f2)
 
-            # Get commits from yesterday using GitHub API
             COMMITS=$(gh api "repos/${REPO}/commits?since=${SINCE}&until=${UNTIL}&per_page=100" \
               --jq '.[] | "| `" + (.sha[:7]) + "` | " + (.commit.message | split("\n")[0]) + " |"' \
-              2>/dev/null || echo "")
+              2>/dev/null || true)
 
             if [ -n "$COMMITS" ]; then
               COUNT=$(echo "$COMMITS" | wc -l)
               TOTAL_COMMITS=$((TOTAL_COMMITS + COUNT))
-              BODY="${BODY}
-## ${REPO_NAME}
-
-**Commits:** ${COUNT}
-
-| Commit | Message |
-|--------|---------|
-${COMMITS}
-"
+              {
+                echo ""
+                echo "## ${REPO_NAME}"
+                echo ""
+                echo "Commits: ${COUNT}"
+                echo ""
+                echo "| Commit | Message |"
+                echo "|--------|---------|"
+                echo "$COMMITS"
+              } >> "$TMPFILE"
             fi
           done
 
-          # Skip if no commits
           if [ "$TOTAL_COMMITS" -eq 0 ]; then
             echo "No commits found for ${SUMMARY_DATE}. Skipping."
+            rm -f "$TMPFILE"
             exit 0
           fi
 
-          # Write the summary file
-          cat > "${FILENAME}" << HEREDOC
-          # Activity Summary — ${DISPLAY_DATE}
+          ACTIVE_REPOS=$(grep -c "^## " "$TMPFILE" || true)
 
-          **Total Commits:** ${TOTAL_COMMITS}
-          **Repos with Activity:** $(echo "$BODY" | grep -c "^## " || true)
+          {
+            echo "# Activity Summary - ${DISPLAY_DATE}"
+            echo ""
+            echo "Total Commits: ${TOTAL_COMMITS}"
+            echo "Repos with Activity: ${ACTIVE_REPOS}"
+            echo ""
+            echo "---"
+            cat "$TMPFILE"
+            echo ""
+            echo "---"
+            echo ""
+            echo "Generated automatically at $(date -u +'%Y-%m-%d %H:%M UTC')"
+          } > "${FILENAME}"
 
-          ---
-          ${BODY}
-          ---
-
-          *Generated automatically at $(date -u +"%Y-%m-%d %H:%M UTC")*
-          HEREDOC
-
-          # Clean up leading whitespace from heredoc
-          sed -i 's/^          //' "${FILENAME}"
-
+          rm -f "$TMPFILE"
           echo "Generated ${FILENAME} with ${TOTAL_COMMITS} commits"
 
       - name: Commit and push
