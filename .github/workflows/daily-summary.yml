@@ -4,7 +4,7 @@ on:
   schedule:
     # Midnight ET = 05:00 UTC (EST) / 04:00 UTC (EDT)
     - cron: "0 4 * * *"
-  workflow_dispatch: # Manual trigger for testing
+  workflow_dispatch: # Allow manual trigger
 
 permissions:
   contents: write
